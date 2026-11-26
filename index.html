@@ -2660,6 +2660,206 @@ a { color: inherit; text-decoration: none; }
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script>
+(function () {
+  "use strict";
+  var OWNER = "nhandzzc";
+  var REPO = "our-story";
+  var BRANCH = "main";
+  var FILE = "content.json";
+  var TOKEN_KEY = "blue-hydrangea.gh-token";
+  var STAMP_KEY = "blue-hydrangea.last-publish";
+  var KEYS = [
+    "blue-hydrangea.profile.v1",
+    "blue-hydrangea.gallery.v2",
+    "blue-hydrangea.stories.v1",
+    "blue-hydrangea.wishes.v2",
+    "blue-hydrangea.note-index.v1",
+    "blue-hydrangea.letter-versions.v1"
+  ];
+  var RAW_URL = "https://raw.githubusercontent.com/" + OWNER + "/" + REPO + "/" + BRANCH + "/" + FILE;
+  var API_URL = "https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/" + FILE;
+
+  function getToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; }
+  }
+  function setTokenValue(value) {
+    try { localStorage.setItem(TOKEN_KEY, value); } catch (e) {}
+  }
+  function writeKey(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+  }
+  function applyRemote(payload) {
+    if (!payload || !payload.data) return false;
+    KEYS.forEach(function (key) {
+      if (payload.data[key] !== undefined && payload.data[key] !== null) writeKey(key, payload.data[key]);
+    });
+    return true;
+  }
+  function toBase64(text) {
+    var bytes = new TextEncoder().encode(text);
+    var binary = "";
+    var chunk = 8192;
+    for (var i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+  function getRemote() {
+    return fetch(RAW_URL + "?t=" + Date.now(), { cache: "no-store" })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .catch(function () { return null; });
+  }
+
+  window.__syncReady = (function () {
+    if (getToken()) return Promise.resolve(null);
+    return Promise.race([
+      getRemote(),
+      new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 4000); })
+    ]).then(function (payload) {
+      if (payload) applyRemote(payload);
+      return payload;
+    });
+  })();
+
+  var CSS = [
+    "#syncRoot{position:fixed;right:20px;bottom:20px;z-index:9990;font-family:'Microsoft YaHei','PingFang SC',sans-serif;}",
+    "#syncRoot .sync-fab{width:46px;height:46px;border-radius:50%;border:1px solid rgba(43,68,106,.18);background:rgba(255,255,255,.92);color:#263f6a;font-size:19px;line-height:1;cursor:pointer;box-shadow:0 12px 30px rgba(39,61,95,.18);backdrop-filter:blur(8px);}",
+    "#syncRoot .sync-fab:hover{background:#fff;}",
+    "#syncRoot .sync-card{position:absolute;right:0;bottom:58px;width:260px;padding:16px 16px 14px;border-radius:16px;background:rgba(255,255,255,.97);border:1px solid rgba(43,68,106,.14);box-shadow:0 18px 46px rgba(39,61,95,.22);color:#243653;}",
+    "#syncRoot .sync-card h4{margin:0 0 6px;font-size:14px;letter-spacing:.04em;color:#263f6a;}",
+    "#syncRoot .sync-state{margin:0 0 12px;font-size:12px;line-height:1.7;color:#65758d;word-break:break-all;}",
+    "#syncRoot .sync-btn{display:block;width:100%;margin-bottom:8px;padding:9px 12px;border-radius:10px;border:1px solid rgba(43,68,106,.16);background:#fff;color:#263f6a;font-size:13px;cursor:pointer;text-align:left;}",
+    "#syncRoot .sync-btn:hover{background:#eef4fc;}",
+    "#syncRoot .sync-btn.primary{background:#263f6a;border-color:#263f6a;color:#fff;}",
+    "#syncRoot .sync-btn.primary:hover{background:#1b3052;}",
+    "#syncRoot .sync-btn.mini{font-size:12px;color:#65758d;background:transparent;border-style:dashed;}",
+    "#syncRoot .sync-close{position:absolute;top:10px;right:12px;border:0;background:transparent;color:#93a3b8;font-size:14px;cursor:pointer;}"
+  ].join("");
+
+  function buildPanel() {
+    if (document.getElementById("syncRoot")) return;
+    var styleTag = document.createElement("style");
+    styleTag.textContent = CSS;
+    document.head.appendChild(styleTag);
+
+    var root = document.createElement("div");
+    root.id = "syncRoot";
+    root.innerHTML = [
+      '<div class="sync-card" id="syncCard" hidden>',
+      '<button class="sync-close" id="syncClose" type="button" aria-label="关闭">✕</button>',
+      "<h4>线上同步</h4>",
+      '<p class="sync-state" id="syncState"></p>',
+      '<button class="sync-btn primary" id="syncPush" type="button">把我的改动发布上线</button>',
+      '<button class="sync-btn" id="syncPull" type="button">从线上拉取（覆盖本地）</button>',
+      '<button class="sync-btn mini" id="syncTokenBtn" type="button">设置 / 更换访问令牌</button>',
+      "</div>",
+      '<button class="sync-fab" id="syncFab" type="button" title="线上同步" aria-label="线上同步">☁</button>'
+    ].join("");
+    document.body.appendChild(root);
+
+    var card = root.querySelector("#syncCard");
+    var state = root.querySelector("#syncState");
+
+    function setState(text) { state.textContent = text; }
+
+    function openCard() {
+      card.hidden = false;
+      var stamp = "";
+      try { stamp = localStorage.getItem(STAMP_KEY) || ""; } catch (e) {}
+      var mode = getToken() ? "当前是「作者模式」，页面用本地内容。" : "当前是「访客模式」，页面显示线上内容。";
+      setState(mode + (stamp ? " 上次发布：" + stamp : ""));
+    }
+
+    function publish() {
+      var token = getToken();
+      if (!token) { askToken(publish); return; }
+      setState("正在发布，请稍等...");
+      var data = {};
+      KEYS.forEach(function (key) {
+        var raw = null;
+        try { raw = localStorage.getItem(key); } catch (e) {}
+        if (raw === null || raw === undefined) return;
+        try { data[key] = JSON.parse(raw); } catch (e) { data[key] = raw; }
+      });
+      var payload = { updatedAt: Date.now(), data: data };
+      var content = toBase64(JSON.stringify(payload));
+      var authHeaders = { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" };
+
+      fetch(API_URL + "?t=" + Date.now(), { headers: authHeaders, cache: "no-store" })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (info) {
+          var body = { message: "同步线上内容 " + new Date().toLocaleString(), content: content, branch: BRANCH };
+          if (info && info.sha) body.sha = info.sha;
+          return fetch(API_URL, {
+            method: "PUT",
+            headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+        })
+        .then(function (res) {
+          if (!res.ok) return res.text().then(function (txt) { throw new Error(txt || ("HTTP " + res.status)); });
+          return res.json();
+        })
+        .then(function () {
+          var now = new Date().toLocaleString();
+          try { localStorage.setItem(STAMP_KEY, now); } catch (e) {}
+          setState("已发布 · " + now + "。别人刷新页面就能看到。");
+        })
+        .catch(function (err) {
+          var message = err && err.message ? err.message : "网络问题";
+          setState("发布失败：" + String(message).slice(0, 140));
+        });
+    }
+
+    function pull() {
+      setState("正在拉取线上内容...");
+      getRemote().then(function (payload) {
+        if (!payload) { setState("线上还没有内容，先发布一次吧。"); return; }
+        applyRemote(payload);
+        setState("已拉取，正在刷新...");
+        setTimeout(function () { location.reload(); }, 700);
+      });
+    }
+
+    function askToken(then) {
+      var input = window.prompt("粘贴你的 GitHub 令牌（以 ghp_ 或 github_pat_ 开头）。只需要设置一次，会保存在本浏览器里。", "");
+      if (input === null) { setState("已取消。"); return; }
+      var value = input.trim();
+      if (!value) { setState("令牌为空，已取消。"); return; }
+      setTokenValue(value);
+      setState("令牌已保存。");
+      if (typeof then === "function") then();
+    }
+
+    root.querySelector("#syncFab").addEventListener("click", function () {
+      if (card.hidden) { openCard(); } else { card.hidden = true; }
+    });
+    root.querySelector("#syncClose").addEventListener("click", function () {
+      card.hidden = true;
+    });
+    root.querySelector("#syncPush").addEventListener("click", publish);
+    root.querySelector("#syncPull").addEventListener("click", pull);
+    root.querySelector("#syncTokenBtn").addEventListener("click", function () {
+      var token = getToken();
+      if (token) {
+        var remove = window.confirm("当前已有令牌。点「确定」重新设置，点「取消」保持不动。\n如果想清空令牌，先点确定再留空即可。");
+        if (!remove) return;
+      }
+      askToken(null);
+    });
+  }
+
+  if (document.body) {
+    buildPanel();
+  } else {
+    document.addEventListener("DOMContentLoaded", buildPanel);
+  }
+
+  window.__sync = { publish: function () { var btn = document.querySelector("#syncPush"); if (btn) btn.click(); } };
+})();
+</script>
+
+<script>
 const STORAGE_KEYS = {
   profile: "blue-hydrangea.profile.v1",
   gallery: "blue-hydrangea.gallery.v2",
@@ -2791,7 +2991,7 @@ const elements = {
   toast: document.querySelector("#toast")
 };
 
-init();
+(window.__syncReady || Promise.resolve()).catch(function () {}).then(init);
 
 function init() {
   bindEvents();
